@@ -30,13 +30,7 @@ vector<Point2f> readPoints(const char* path) {
 	return points;
 }
 
-Mat initializeImage(int height, int width) { 
-	// initialize a white background image
-	Mat img(height, width, CV_8UC3, cv::Scalar(255, 255, 255));
-	return img;
-}
-
-void model1(Mat img, std::vector<Point2f> points) {
+void fitLineModel1ClosedForm(Mat img, vector<Point2f> points) {
 	int n = points.size();
 
 	float theta1 = 0.0, theta0 = 0.0, a = 0.0, b = 0.0;
@@ -58,7 +52,7 @@ void model1(Mat img, std::vector<Point2f> points) {
 	waitKey();
 }
 
-void model2(Mat img, vector<Point2f> points) {
+void fitLineModel2ClosedForm(Mat img, vector<Point2f> points) {
 	int n = points.size();
 
 	float beta = 0.0, rho =0.0 , sumxy = 0.0, sumx = 0.0, sumy = 0.0, sum2 = 0.0;
@@ -104,7 +98,7 @@ void leastMeanSquares() {
 		vector<Point2f> points = readPoints(fname);
 
 		int height = 500, width = 500;
-		Mat img = initializeImage(height, width);
+		Mat img(height, width, CV_8UC3, cv::Scalar(255, 255, 255));
 		
 		int nr = points.size();
 		for (int i = 0; i < nr; i++) {
@@ -119,8 +113,8 @@ void leastMeanSquares() {
 		imshow("Points", img);
 		waitKey();	
 
-		model1(img, points);
-		model2(img, points);
+		fitLineModel1ClosedForm(img, points);
+		fitLineModel2ClosedForm(img, points);
 	}
 }
 

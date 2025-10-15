@@ -11,7 +11,139 @@ using namespace std;
 
 wchar_t* projectPath;
 
-vector<Point2f> readPoints(const char* path) {
+struct peak {
+	float theta;
+	int ro, hval;
+	bool operator < (const peak& o) const {
+		return hval > o.hval;
+	}
+};
+
+vector<Point> readWhitePointsFromImage(Mat img) {
+	vector<Point> points;
+
+	for (int i = 0; i < img.rows; i++) {
+		for (int j = 0; j < img.cols; j++) {
+			if (img.at<uchar>(i, j) == 255) {
+				points.push_back(Point(j, i));
+			}
+		}
+	}
+
+	return points;
+}
+
+int getMaxHough(Mat Hough) {
+	int max = 0;
+	for (int i = 0; i < Hough.rows; i++) {
+		for (int j = 0; j < Hough.cols; j++) {
+			if (Hough.at<int>(i, j) > max) {
+				max = Hough.at<int>(i, j);
+			}
+		}
+	}
+	return max;
+}
+
+bool isLocalMaxima(Mat Hough, int r, int t, int windowSize) {
+	int k = windowSize / 2;
+	int max = Hough.at<int>(r, t);
+	int maxi = r, maxj = t;
+
+	for (int i = r - k; i <= r + k; i++) {
+		for (int j = t - k; j <= t + k; j++) {
+			if (i >= 0 && i < Hough.rows && j >= 0 && j < Hough.cols && !(i == r && j == t)) {
+				if (Hough.at<int>(i, j) > max) {
+					max = Hough.at<int>(i, j);
+					maxi = i; maxj = j;
+				}
+			}
+			
+		}
+	}
+
+	if (maxi == r && maxj == t) 
+		return true;
+
+	return false;
+}
+
+void houghTransformLine() {
+	char fname[MAX_PATH];
+	while (openFileDlg(fname))
+	{
+		Mat img = imread(fname, IMREAD_GRAYSCALE);
+		vector<Point> points = readWhitePointsFromImage(img);
+
+		int diagonal = (int)sqrt(img.rows * img.rows + img.cols * img.cols);
+
+		Mat Hough(diagonal + 1, 360, CV_32SC1);
+		Hough.setTo(0);
+
+		int n = points.size();
+		int dTheta = 1;
+		int dRo = 1;
+		int k = 10;
+
+		for (int i = 0; i < n; i++) {
+			for (int theta = 0; theta < 360; theta += dTheta) {
+				Point p = points.at(i);
+				float thetaRad = theta * PI / 180.0;
+
+				int ro = p.x * cos(thetaRad) + p.y * sin(thetaRad);
+
+				if (ro >= 0) {
+					Hough.at<int>(ro, theta)++;
+				}
+			}
+		}
+
+		Mat houghImg;
+		int maxHough = getMaxHough(Hough);
+		Hough.convertTo(houghImg, CV_8UC1, 255.f / maxHough);
+
+		imshow("Source image", img);
+		imshow("Hough accumulator", houghImg);
+
+		int windowSize = 3;
+		vector<peak> peaks;
+
+		for (int i = 0; i < Hough.rows; i++) {
+			for (int j = 0; j < Hough.cols; j++) {
+				if (isLocalMaxima(Hough, i, j, windowSize)) {
+					float thetaRad = j * PI / 180.0;
+					peaks.push_back(peak{ thetaRad, i, Hough.at<int>(i, j) });
+				}
+				
+			}
+		}
+
+		Mat imgLines = imread(fname, IMREAD_COLOR);
+		std::sort(peaks.begin(), peaks.end());
+
+		for (int i = 0; i < k; i++) {
+			float theta = peaks.at(i).theta;
+			int ro = peaks.at(i).ro;
+
+			float x1, x2;
+			if (abs(theta) < 0.1) {
+				x1 = ro / cos(theta);
+				x2 = (ro - img.cols * sin(theta)) / cos(theta);
+				line(imgLines, Point(x1, 0), Point(x2, img.rows), Scalar(0, 255, 0), 1);
+			}
+			else {
+				x1 = ro / sin(theta);
+				x2 = (ro - img.rows * cos(theta)) / sin(theta);
+				line(imgLines, Point(0, x1), Point(img.cols, x2), Scalar(0, 255, 0), 1);
+			}
+		}
+
+		imshow("Hough lines", imgLines);
+		waitKey();
+	}
+}
+
+vector<Point2f> readPointsFromFile(const char* path) {
 	FILE* f = fopen(path, "r");
 
 	int nr;
@@ -95,7 +227,7 @@ void leastMeanSquares() {
 	char fname[MAX_PATH];
 	while (openFileDlg(fname))
 	{
-		vector<Point2f> points = readPoints(fname);
+		vector<Point2f> points = readPointsFromFile(fname);
 
 		int height = 500, width = 500;
 		Mat img(height, width, CV_8UC3, cv::Scalar(255, 255, 255));
@@ -631,7 +763,6 @@ void showHistogram(const std::string& name, int* hist, const int  hist_cols, con
 	imshow(name, imgHist);
 }
 
-
 int main() 
 {
 	cv::utils::logging::setLogLevel(cv::utils::logging::LOG_LEVEL_FATAL);
@@ -657,6 +788,7 @@ int main()
 		printf(" 12 - Mouse callback demo\n");
 		printf(" 13 - Least Mean Squares\n");
 		printf(" 14 - RANSAC line\n");
+		printf(" 15 - Hough Transform for line detection\n");
 		printf(" 0 - Exit\n\n");
 		printf("Option: ");
 		scanf("%d",&op);
@@ -703,6 +835,9 @@ int main()
 				break;
 			case 14:
 				ransacLine();
+				break;
+			case 15:
+				houghTransformLine();
 				break;
 		}
 	}

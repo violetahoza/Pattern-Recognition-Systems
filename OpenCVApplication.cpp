@@ -763,6 +763,76 @@ void showHistogram(const std::string& name, int* hist, const int  hist_cols, con
 	imshow(name, imgHist);
 }
 
+Mat distanceTransform(Mat img) {
+	Mat dtImg;
+	img.copyTo(dtImg);
+
+	int wHV = 2; 
+	int wD = 3;   
+
+	// first pass: top-down, left-right
+	for (int i = 1; i < dtImg.rows - 1; i++) {
+		for (int j = 1; j < dtImg.cols - 1; j++) {
+			int minVal = dtImg.at<uchar>(i, j);
+
+			minVal = min(minVal, dtImg.at<uchar>(i - 1, j - 1) + wD);  // top-left
+			minVal = min(minVal, dtImg.at<uchar>(i - 1, j) + wHV);   // top
+			minVal = min(minVal, dtImg.at<uchar>(i - 1, j + 1) + wD);  // top-right
+			minVal = min(minVal, dtImg.at<uchar>(i, j - 1) + wHV);   // left
+
+			dtImg.at<uchar>(i, j) = minVal;
+		}
+	}
+
+	// second pass: bottom-up, right-left
+	for (int i = dtImg.rows - 2; i >= 1; i--) {
+		for (int j = dtImg.cols - 2; j >= 1; j--) {
+			int minVal = dtImg.at<uchar>(i, j);
+
+			minVal = min(minVal, dtImg.at<uchar>(i, j + 1) + wHV);   // right
+			minVal = min(minVal, dtImg.at<uchar>(i + 1, j - 1) + wD);  // bottom-left
+			minVal = min(minVal, dtImg.at<uchar>(i + 1, j) + wHV);   // bottom
+			minVal = min(minVal, dtImg.at<uchar>(i + 1, j + 1) + wD);  // bottom-right
+
+			dtImg.at<uchar>(i, j) = minVal;
+		}
+	}
+
+	return dtImg;
+}
+
+void patternMatchingDT()
+{
+	char fname[MAX_PATH];
+	while (openFileDlg(fname))
+	{
+		Mat templateImg = imread(fname, IMREAD_GRAYSCALE);
+		imshow("Template", templateImg);
+
+		openFileDlg(fname);
+		Mat unknownImg = imread(fname, IMREAD_GRAYSCALE);
+		imshow("Unknown object", unknownImg);
+
+		Mat distTransform = distanceTransform(templateImg);
+		imshow("Distance Transform", distTransform);
+
+		float score = 0;
+		int count = 0;
+		for (int i = 0; i < unknownImg.rows; i++) {
+			for (int j = 0; j < unknownImg.cols; j++) {
+				if (unknownImg.at<uchar>(i, j) == 0) {  // contour pixel
+					score += distTransform.at<uchar>(i, j);
+					count++;
+				}
+			}
+		}
+		if (count > 0) score = score / count;		
+		printf("Pattern matching score: %f\n", score);
+
+		waitKey();
+	}
+}
+
 int main() 
 {
 	cv::utils::logging::setLogLevel(cv::utils::logging::LOG_LEVEL_FATAL);
@@ -789,6 +859,7 @@ int main()
 		printf(" 13 - Least Mean Squares\n");
 		printf(" 14 - RANSAC line\n");
 		printf(" 15 - Hough Transform for line detection\n");
+		printf(" 16 - Distance Transform (DT). Pattern Matching using DT\n");
 		printf(" 0 - Exit\n\n");
 		printf("Option: ");
 		scanf("%d",&op);
@@ -838,6 +909,9 @@ int main()
 				break;
 			case 15:
 				houghTransformLine();
+				break;
+			case 16:
+				patternMatchingDT();
 				break;
 		}
 	}

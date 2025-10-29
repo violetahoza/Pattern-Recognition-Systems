@@ -833,6 +833,105 @@ void patternMatchingDT()
 	}
 }
 
+Mat correlationChart(int f1, int f2, Mat featureMat) {
+	Mat chart(256, 256, CV_8UC1, Scalar(255));
+
+	for (int i = 0; i < featureMat.rows; i++) {
+		int val1 = featureMat.at<uchar>(i, f1);
+		int val2 = featureMat.at<uchar>(i, f2);
+		chart.at<uchar>(val1, val2) = 0;
+	}
+
+	return chart;
+}
+
+void statisticalDataAnalysis()
+{
+	char folder[256] = "images_faces";
+	char fname[256];
+
+	int p = 400;
+	int d = 19;
+	int N = d * d;
+	Mat featureMat(p, N, CV_8UC1);
+
+	for (int i = 0; i < p; i++) {
+		sprintf(fname, "%s/face%05d.bmp", folder, i + 1);
+		Mat img = imread(fname,IMREAD_GRAYSCALE);
+		for (int u = 0; u < d; u++) {
+			for (int v = 0; v < d; v++) {
+				int col = u * d + v;
+				uchar val = img.at<uchar>(u, v);
+				featureMat.at<uchar>(i, col) = val;
+			}
+		}
+	}
+
+	// compute mean value for each feature (pixel)
+	vector<float> means;
+	for (int i = 0; i < N; i++) {
+		int mean = 0;
+		for (int k = 0; k < p; k++) {
+			mean += featureMat.at<uchar>(k, i);
+		}
+		mean = mean / p;
+		means.push_back((float)mean);
+	}
+
+
+	// compute the covariance matrix
+	Mat covarianceMatrix(N, N, CV_32FC1);
+	for (int i = 0; i < N; i++) {
+		for (int j = 0; j < N; j++) {
+			float covariance = 0.0;
+			for (int k = 0; k < p; k++) {
+				covariance += (featureMat.at<uchar>(k, i) - means.at(i)) * (featureMat.at<uchar>(k, j) - means.at(j));
+			}
+			covariance = covariance / p;
+			covarianceMatrix.at<float>(i, j) = covariance;
+		}
+	}
+
+	// compute the standard deviation for each feature
+	vector<float> stdDevs;
+	for (int i = 0; i < N; i++) {
+		float variance = covarianceMatrix.at<float>(i, i);
+		float stdDev = sqrt(variance);
+		stdDevs.push_back(stdDev);
+	}
+
+	// compute the correlation matrix
+	Mat correlationMatrix(N, N, CV_32FC1);
+	for (int i = 0; i < N; i++) {
+		for (int j = 0; j < N; j++) {
+			float covariance = covarianceMatrix.at<float>(i, j);
+			float correlation = covariance / (stdDevs.at(i) * stdDevs.at(j));
+			correlationMatrix.at<float>(i, j) = correlation;
+		}
+	}
+
+	// correlation charts for some feature pairs
+	int i = 5 * d + 4;
+	int j = 5 * d + 14;
+	printf("Correlation between features %d and %d: %f\n", i, j, correlationMatrix.at<float>(i, j));
+	Mat chart1 = correlationChart(i, j, featureMat);
+	imshow("Correlation chart a", chart1);
+
+	i = 10 * d + 3;
+	j = 9 * d + 15;
+	printf("Correlation between features %d and %d: %f\n", i, j, correlationMatrix.at<float>(i, j));
+	Mat chart2 = correlationChart(i, j, featureMat);
+	imshow("Correlation chart b", chart2);
+
+	i = 5 * d + 4;
+	j = 18 * d;
+	printf("Correlation between features %d and %d: %f\n", i, j, correlationMatrix.at<float>(i, j));
+	Mat chart3 = correlationChart(i, j, featureMat);
+	imshow("Correlation chart c", chart3);
+
+	waitKey();
+}
+
 int main() 
 {
 	cv::utils::logging::setLogLevel(cv::utils::logging::LOG_LEVEL_FATAL);
@@ -860,6 +959,7 @@ int main()
 		printf(" 14 - RANSAC line\n");
 		printf(" 15 - Hough Transform for line detection\n");
 		printf(" 16 - Distance Transform (DT). Pattern Matching using DT\n");
+		printf(" 17 - Statistical Data Analysis\n");
 		printf(" 0 - Exit\n\n");
 		printf("Option: ");
 		scanf("%d",&op);
@@ -912,6 +1012,9 @@ int main()
 				break;
 			case 16:
 				patternMatchingDT();
+				break;
+			case 17:
+				statisticalDataAnalysis();
 				break;
 		}
 	}

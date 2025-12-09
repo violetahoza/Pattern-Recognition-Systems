@@ -5,11 +5,15 @@
 #include "common.h"
 #include <math.h>
 #include <opencv2/core/utils/logger.hpp>
+#include <fstream>
+#include "FaceDetection.h"
 
 using namespace cv;
 using namespace std;
 
 wchar_t* projectPath;
+
+FaceDetector faceDetector;
 
 struct peak {
 	float theta;
@@ -775,6 +779,7 @@ Mat distanceTransform(Mat img) {
 		for (int j = 1; j < dtImg.cols - 1; j++) {
 			int minVal = dtImg.at<uchar>(i, j);
 
+			// 5 pixels connectivity
 			minVal = min(minVal, dtImg.at<uchar>(i - 1, j - 1) + wD);  // top-left
 			minVal = min(minVal, dtImg.at<uchar>(i - 1, j) + wHV);   // top
 			minVal = min(minVal, dtImg.at<uchar>(i - 1, j + 1) + wD);  // top-right
@@ -801,6 +806,49 @@ Mat distanceTransform(Mat img) {
 	return dtImg;
 }
 
+Point2d computeCenter(Mat img) {
+	double sumX = 0, sumY = 0;
+	int count = 0;
+	for (int i = 0; i < img.rows; i++) {
+		for (int j = 0; j < img.cols; j++) {
+			if (img.at<uchar>(i, j) == 0) { // object pixel
+				sumX += j;
+				sumY += i;
+				count++;
+			}
+		}
+	}
+	if (count == 0) return Point2d(img.cols / 2.0, img.rows / 2.0);
+	return Point2d(sumX / count, sumY / count);
+}
+
+Mat alignToCenter(Mat unknownImg, Mat templateImg)
+{
+	Point2d templateCenter = computeCenter(templateImg);
+	Point2d unknownCenter = computeCenter(unknownImg);
+
+	double dx = templateCenter.x - unknownCenter.x;
+	double dy = templateCenter.y - unknownCenter.y;
+
+	Mat aligned = Mat(unknownImg.rows, unknownImg.cols, CV_8UC1, Scalar(255));
+
+	for (int y = 0; y < unknownImg.rows; y++) {
+		for (int x = 0; x < unknownImg.cols; x++) {
+			if (unknownImg.at<uchar>(y, x) == 0) {
+				int newX = round(x + dx);
+				int newY = round(y + dy);
+
+				if (newX >= 0 && newX < unknownImg.cols &&
+					newY >= 0 && newY < unknownImg.rows) {
+					aligned.at<uchar>(newY, newX) = 0;
+				}
+			}
+		}
+	}
+
+	return aligned;
+}
+
 void patternMatchingDT()
 {
 	char fname[MAX_PATH];
@@ -815,6 +863,9 @@ void patternMatchingDT()
 
 		Mat distTransform = distanceTransform(templateImg);
 		imshow("Distance Transform", distTransform);
+
+		//unknownImg = alignToCenter(unknownImg, templateImg);
+		//imshow("Aligned unknown object", unknownImg);
 
 		float score = 0;
 		int count = 0;
@@ -847,12 +898,12 @@ Mat correlationChart(int f1, int f2, Mat featureMat) {
 
 void statisticalDataAnalysis()
 {
-	char folder[256] = "images_faces";
+	char folder[256] = "Images/images_faces";
 	char fname[256];
 
-	int p = 400;
-	int d = 19;
-	int N = d * d;
+	int p = 400; // nr of images
+	int d = 19; // image size
+	int N = d * d; // nr of features (pixels)
 	Mat featureMat(p, N, CV_8UC1);
 
 	for (int i = 0; i < p; i++) {
@@ -878,6 +929,8 @@ void statisticalDataAnalysis()
 		means.push_back((float)mean);
 	}
 
+	ofstream covarianceFile;
+	covarianceFile.open("covariance.csv");
 
 	// compute the covariance matrix
 	Mat covarianceMatrix(N, N, CV_32FC1);
@@ -889,16 +942,25 @@ void statisticalDataAnalysis()
 			}
 			covariance = covariance / p;
 			covarianceMatrix.at<float>(i, j) = covariance;
+			covarianceFile << covariance << ",";
 		}
+		covarianceFile << endl;
 	}
+	covarianceFile.close();
 
 	// compute the standard deviation for each feature
 	vector<float> stdDevs;
 	for (int i = 0; i < N; i++) {
-		float variance = covarianceMatrix.at<float>(i, i);
-		float stdDev = sqrt(variance);
+		float stdDev = 0;
+		for (int k = 0; k < p; k++) {
+			stdDev += pow(featureMat.at<uchar>(k, i) - means.at(i), 2);
+		}
+		stdDev = sqrt(stdDev / p);
 		stdDevs.push_back(stdDev);
 	}
+
+	ofstream correlationFile;
+	correlationFile.open("correlation.csv");
 
 	// compute the correlation matrix
 	Mat correlationMatrix(N, N, CV_32FC1);
@@ -907,8 +969,11 @@ void statisticalDataAnalysis()
 			float covariance = covarianceMatrix.at<float>(i, j);
 			float correlation = covariance / (stdDevs.at(i) * stdDevs.at(j));
 			correlationMatrix.at<float>(i, j) = correlation;
+			correlationFile << correlation << ",";
 		}
+		correlationFile << endl;
 	}
+	correlationFile.close();
 
 	// correlation charts for some feature pairs
 	int i = 5 * d + 4;
@@ -931,6 +996,620 @@ void statisticalDataAnalysis()
 
 	waitKey();
 }
+
+void principalComponentAnalysis()
+{
+	char fname[MAX_PATH];
+	while (openFileDlg(fname)) {
+		FILE* f = fopen(fname, "r");
+		int n, d;
+		fscanf(f, "%d %d", &n, &d);
+		Mat FEAT(n, d, CV_64FC1);
+		for (int i = 0; i < n; i++) {
+			for (int j = 0; j < d; j++) {
+				double val;
+				fscanf(f, "%lf", &val);
+				FEAT.at<double>(i, j) = val;
+			}
+		}
+		fclose(f);
+
+		vector<double> means;
+		for (int j = 0; j < d; j++) {
+			double mean = 0.0;
+			for (int i = 0; i < n; i++) {
+				mean += FEAT.at<double>(i, j);
+			}
+			mean = mean / n;
+			means.push_back(mean);
+		}
+
+		Mat X(n, d, CV_64FC1);
+		for (int i = 0; i < n; i++) {
+			for (int j = 0; j < d; j++) {
+				X.at<double>(i, j) = FEAT.at<double>(i, j) - means.at(j);
+			}
+		}
+
+		Mat C = (1.0 / (n - 1)) * X.t() * X; 
+
+		Mat Lambda, Q;
+		eigen(C, Lambda, Q);
+		Q = Q.t();
+
+		for (int i = 0; i < d; i++) {
+			printf("Lambda %d: %f\n", i, Lambda.at<double>(i));
+		}
+
+		int k = 2;
+		Mat Qk(d, k, CV_64FC1);
+		for (int i = 0; i < d; i++) {
+			for (int j = 0; j < k; j++) {
+				Qk.at<double>(i, j) = Q.at<double>(i, j);
+			}
+		}
+
+		Mat Xpca;
+		Xpca = X * Qk;
+
+		Mat Xkapprox;
+		Xkapprox = Xpca * Qk.t();
+
+		float MAD = 0;
+		for (int i = 0; i < n; i++) {
+			for (int j = 0; j < d; j++) {
+				MAD += abs(Xkapprox.at<double>(i, j) - X.at<double>(i, j));
+			}
+		}
+		MAD = MAD / (n * d);
+		printf("Mean absolute difference: %f\n", MAD);
+
+		vector<float> mins(k);
+		vector<float> maxs(k);
+		for (int i = 0; i < k; i++) {
+			mins.at(i) = Xpca.at<double>(0, i);
+			maxs.at(i) = Xpca.at<double>(0, i);
+		}
+		for (int i = 0; i < n; i++) {
+			for (int j = 0; j < k; j++) {
+				if (Xpca.at<double>(i, j) < mins.at(j)) {
+					mins.at(j) = Xpca.at<double>(i, j);
+				}
+
+				if (Xpca.at<double>(i, j) > maxs.at(j)) {
+					maxs.at(j) = Xpca.at<double>(i, j);
+				}
+			}
+		}
+
+		Mat img((int)(maxs.at(0) - mins.at(0) + 1),(int)(maxs.at(1) - mins.at(1) + 1), CV_8UC1, Scalar(255));
+		for (int i = 0; i < n; i++) {
+			if (k == 2) {
+				img.at<uchar>((int)(Xpca.at<double>(i, 0) - mins.at(0)), (int)(Xpca.at<double>(i, 1) - mins.at(1))) = 0;
+			}
+			else if (k == 3) {
+				uchar val = (255 / (maxs.at(2) - mins.at(2))) * (Xpca.at<double>(i, 2) - mins.at(2));
+				img.at<uchar>((int)(Xpca.at<double>(i, 0) - mins.at(0)), (int)(Xpca.at<double>(i, 1) - mins.at(1))) = 255 - val;
+			}
+		}
+
+		imshow("After PCA", img);
+		waitKey();
+	}
+}
+
+float pointsDistance(Point3i p, Point3i center) {
+	return sqrt(pow(p.x - center.x, 2) + pow(p.y - center.y, 2));
+}
+
+
+void kmeansClustering()
+{
+	char fname[MAX_PATH];
+	while (openFileDlg(fname)) {
+		Mat img = imread(fname, IMREAD_GRAYSCALE);
+		int d = 2;
+
+		vector<Point3i> points;
+		for (int i = 0; i < img.rows; i++) {
+			for (int j = 0; j < img.cols; j++) {
+				if (img.at<uchar>(i, j) == 0) {
+					points.push_back(Point3i(j, i, -1));
+				}
+			}
+		}
+		int n = points.size();
+
+		srand(time(NULL));
+		int c1, c2, c3;
+		c1 = rand() % n;
+		c2 = rand() % n;
+		while (c1 == c2) {
+			c2 = rand() % n;
+		}
+		c3 = rand() % n;
+		while (c1 == c3 || c2 == c3) {
+			c3 = rand() % n;
+		}
+
+		printf("c1 %d c2 %d c3 %d\n", c1, c2, c3);
+
+		vector<int> randomIndex;
+		randomIndex.push_back(c1);
+		randomIndex.push_back(c2);
+		randomIndex.push_back(c3);
+
+		int K = 3;
+		vector<Point3i> centers;
+
+		for (int i = 0; i < randomIndex.size(); i++) {
+			points.at(randomIndex.at(i)).z = i;
+			centers.push_back(points.at(randomIndex.at(i)));
+		}
+
+		// Assignment
+		boolean changed = false;
+		int cycle = 0;
+		do {
+			printf("cycle: %d\n", cycle);
+			for (int i = 0; i < n; i++) {
+				float min;
+				if (points.at(i).z == -1) {
+					min = img.rows * img.rows + img.cols * img.cols;
+				}
+				else {
+					min = pointsDistance(points.at(i), centers.at(points.at(i).z));
+				}
+				Point3i kMin;
+				changed = false;
+				for (int k = 0; k < K; k++) {
+					if (points.at(i) != centers.at(k)) {
+						float dist = pointsDistance(points.at(i), centers.at(k));
+						if (dist < min) {
+							changed = true;
+							min = dist;
+							kMin = centers.at(k);
+						}
+					}
+				}
+				if (changed) {
+					points.at(i).z = kMin.z;
+				}
+			}
+
+			// Update centers
+			for (int k = 0; k < K; k++) {
+				int x = 0;
+				int y = 0;
+				int nr = 0;
+				for (int i = 0; i < n; i++) {
+					if (points.at(i).z == k) {
+						x += points.at(i).x;
+						y += points.at(i).y;
+						nr++;
+					}
+				}
+				x = x / nr;
+				y = y / nr;
+				centers.at(k).x = x;
+				centers.at(k).y = y;
+			}
+			cycle++;
+		} while (changed);
+
+		// Assign colors to clusters
+		vector<Vec3b> colors;
+		for (int i = 0; i < K; i++) {
+			//uchar col1 = rand() % 255;
+			colors.push_back(Vec3b(rand() % 255, rand() % 255, rand() % 255));
+		}
+		/*colors.push_back({ 255, 0, 0 });
+		colors.push_back({ 0, 255, 0 });
+		colors.push_back({ 0, 0, 255 });*/
+
+		Mat clustersImg(img.rows, img.cols, CV_8UC3, Scalar(255, 255, 255));
+
+		for (int i = 0; i < points.size(); i++) {
+			Point3i p = points.at(i);
+			clustersImg.at<Vec3b>(p.x, p.y) = colors.at(p.z);
+		}
+
+		imshow("Clusters", clustersImg);
+
+		Mat voronoi(img.rows, img.cols, CV_8UC3, Scalar(255, 255, 255));
+		for (int i = 0; i < voronoi.rows; i++) {
+			for (int j = 0; j < voronoi.cols; j++) {
+				float min = img.rows * img.rows + img.cols * img.cols;
+				Point3i kMin;
+				for (int k = 0; k < K; k++) {
+					float dist = pointsDistance(Point3i(i, j, -1), centers.at(k));
+					if (dist < min) {
+						min = dist;
+						kMin = centers.at(k);
+					}
+				}
+				voronoi.at<Vec3b>(i, j) = colors.at(kMin.z);
+			}
+		}
+		imshow("Voronoi", voronoi);
+
+		waitKey(0);
+	}
+}	
+
+int* calcHist(Mat img, int nr_bins)
+{
+	int histSize = 3 * nr_bins;
+	int binSize = 256 / nr_bins;
+	int* hist = (int*)calloc(histSize, sizeof(int));
+
+	for (int i = 0; i < img.rows; i++) {
+		for (int j = 0; j < img.cols; j++) {
+			int R = img.at<Vec3b>(i, j)[2];
+			int G = img.at<Vec3b>(i, j)[1];
+			int B = img.at<Vec3b>(i, j)[0];
+			hist[(int)(R / binSize)]++;
+			hist[(int)(nr_bins + G / binSize)]++;
+			hist[(int)(2 * nr_bins + B / binSize)]++;
+		}
+	}
+	return hist;
+}
+
+int predict(Mat featureVec, Mat labels, Mat img, int histSize, int k, int nrClasses) 
+{
+	int* hist = calcHist(img, histSize / 3);
+
+	// compute distance
+	vector<float> distances;
+	vector<int> indices;
+
+	for (int i = 0; i < featureVec.rows; i++) {
+		float dist = 0;
+		for (int t = 0; t < histSize; t++) {
+			dist += pow(featureVec.at<float>(i, t) - hist[t], 2);
+		}
+		dist = sqrt(dist);
+		distances.push_back(dist);
+		indices.push_back(i);
+	}
+
+	// sort indices based on distances
+	for (int i = 0; i < distances.size() - 1; i++) {
+		for (int j = i + 1; j < distances.size(); j++) {
+			if (distances[j] < distances[i]) {
+				swap(distances[i], distances[j]);
+				swap(indices[i], indices[j]);
+			}
+		}
+	}
+
+	// determine k-nearest neighbors
+	int* classesVotes = (int*)calloc(nrClasses, sizeof(int));
+	for (int i = 0; i < k; i++) {
+		classesVotes[labels.at<uchar>(indices[i], 0)]++;
+	}
+
+	int maxVotes = 0;
+	int maxClass = 0;
+	for (int i = 0; i < nrClasses; i++) {
+		if (classesVotes[i] > maxVotes) {
+			maxVotes = classesVotes[i];
+			maxClass = i;
+		}
+	}
+	free(classesVotes);
+
+	return maxClass;
+}
+
+void knnClassifier()
+{
+	const int nrclasses = 6;
+	char classes[nrclasses][10] = { "beach", "city", "desert", "forest", "landscape", "snow" };
+	
+	int nrInst = 672, m = 8, rowX = 0, k = 5;
+	int histSize = 3 * m;
+	int featureDim = histSize;
+
+	Mat X(nrInst, featureDim, CV_32FC1);
+	Mat y(nrInst, 1, CV_8UC1);
+
+	char fname[50];
+	for (int c = 0; c < nrclasses; c++) {
+		int fileNr = 0;
+		while (1) {
+			sprintf(fname, "Images/images_KNN/train/%s/%06d.jpeg", classes[c], fileNr++);
+			Mat img = imread(fname, IMREAD_COLOR);
+			if (img.cols == 0) break;
+
+			// compute histogram
+			int* hist = calcHist(img, m);
+			for (int d = 0; d < histSize; d++)
+				X.at<float>(rowX, d) = hist[d];
+
+			y.at<uchar>(rowX) = c;
+			rowX++;
+		}
+	}
+
+	Mat C(nrclasses, nrclasses, CV_32FC1, Scalar(0));
+
+	int testInstances = 85;
+	for (int c = 0; c < nrclasses; c++) {
+		int fileNr = 0;
+		while (1) {
+			sprintf(fname, "Images/images_KNN/test/%s/%06d.jpeg", classes[c], fileNr++);
+			Mat img = imread(fname, IMREAD_COLOR);
+			if (img.cols == 0) break;
+			int predictedClass = predict(X, y, img, histSize, k, nrclasses);
+			C.at<float>(c, predictedClass) += 1.0f;
+		}
+	}
+
+	imshow("Confusion Matrix", C);
+	printf("Confusion matrix:\n");
+	for (int i = 0; i < C.rows; i++) {
+		for (int j = 0; j < C.cols; j++) {
+			printf("%.1f ", C.at<float>(i, j));
+		}
+		printf("\n");
+	}
+
+	float accuracy = 0.0;
+	for (int i = 0; i < nrclasses; i++) {
+		accuracy += C.at<float>(i, i);
+	}
+	accuracy /= (float)testInstances;
+	printf("Accuracy: %f\n", accuracy);
+
+	waitKey();
+}
+
+void naiveBayes() {
+	const int nrClasses = 10;
+	char classes[nrClasses][2] = { "0", "1", "2", "3", "4", "5", "6", "7", "8", "9" };
+	int nrinstancesPerClass[nrClasses];
+
+	// Allocate feature matrix X and label vector y
+	//int instancesPerClass = 100;
+	int nrTraining = 60000;
+	float cProb = 0.1;
+	int nrFeatures = 28 * 28;
+	uchar threshold = 128;
+	Mat X(nrTraining, nrFeatures, CV_8UC1);
+	Mat y(nrTraining, 1, CV_8UC1);
+	Mat L255(nrClasses, nrFeatures, CV_32FC1, Scalar(0));
+	Mat apriori(nrClasses, 1, CV_32FC1);
+
+	int rowX = 0;
+	char fname[50];
+	for (int c = 0; c < nrClasses; c++) {
+		int fileNr = 0;
+		while (1) {
+			sprintf(fname, "Images/images_Bayes/train/%s/%06d.png", classes[c], fileNr++);
+			Mat img = imread(fname, IMREAD_GRAYSCALE);
+			//if (img.cols == 0) break;
+			if (img.cols == 0) {
+				apriori.at<float>(c) = (float)fileNr / nrTraining;
+				nrinstancesPerClass[c] = fileNr;
+				break;
+			}
+
+			// Thresholding
+			for (int i = 0; i < img.rows; i++) {
+				for (int j = 0; j < img.cols; j++) {
+					if (img.at<uchar>(i, j) < threshold) {
+						X.at<uchar>(rowX, i * img.cols + j) = 0;
+					}
+					else {
+						X.at<uchar>(rowX, i * img.cols + j) = 255;
+						L255.at<float>(c, i * img.cols + j)++;
+					}
+				}
+			}
+			y.at<uchar>(rowX) = c;
+			rowX++;
+		}
+	}
+
+	// Performance of model - compute accuracy
+	int totalNrTestInstances = 0;
+	int correct = 0;
+	for (int cl = 0; cl < nrClasses; cl++) {
+		int fileNr = 0;
+		while (1) {
+			sprintf(fname, "Images/images_Bayes/test/%s/%06d.png", classes[cl], fileNr++);
+			Mat img = imread(fname, IMREAD_GRAYSCALE);
+			//if (img.cols == 0) break;
+			if (img.cols == 0) {
+
+				break;
+			}
+			totalNrTestInstances++;
+
+			// Thresholding
+			for (int i = 0; i < img.rows; i++) {
+				for (int j = 0; j < img.cols; j++) {
+					if (img.at<uchar>(i, j) < threshold) {
+						img.at<uchar>(i, j) = 0;
+					}
+					else {
+						img.at<uchar>(i, j) = 255;
+					}
+				}
+			}
+
+			float maxProb = INT_MIN;
+			int finalClass = 0;
+			for (int c = 0; c < nrClasses; c++) {
+				float prob = 0;
+				for (int i = 0; i < img.rows; i++) {
+					for (int j = 0; j < img.cols; j++) {
+						float p = L255.at<float>(c, i * img.cols + j) / nrinstancesPerClass[c];
+						if (img.at<uchar>(i, j) == 0) {
+							p = 1 - p;
+						}
+						if (p == 0) {
+							p = pow(10, -5);
+						}
+						prob += log(p);
+					}
+				}
+				prob += log(apriori.at<float>(c));
+				if (prob > maxProb) {
+					maxProb = prob;
+					finalClass = c;
+				}
+			}
+			if (finalClass == cl) {
+				correct++;
+			}
+		}
+	}
+	float accuracy = (float)correct / totalNrTestInstances;
+	printf("Accuracy is %f\n", accuracy);
+
+	char imgname[MAX_PATH];
+	while (openFileDlg(imgname)) {
+		Mat img = imread(imgname, IMREAD_GRAYSCALE);
+
+		// Thresholding
+		for (int i = 0; i < img.rows; i++) {
+			for (int j = 0; j < img.cols; j++) {
+				if (img.at<uchar>(i, j) < threshold) {
+					img.at<uchar>(i, j) = 0;
+				}
+				else {
+					img.at<uchar>(i, j) = 255;
+				}
+			}
+		}
+
+		float maxProb = INT_MIN;
+		int finalClass = 0;
+		for (int c = 0; c < nrClasses; c++) {
+			float prob = 0;
+			for (int i = 0; i < img.rows; i++) {
+				for (int j = 0; j < img.cols; j++) {
+					float p = L255.at<float>(c, i * img.cols + j) / nrinstancesPerClass[c];
+					if (img.at<uchar>(i, j) == 0) {
+						p = 1 - p;
+					}
+					if (p == 0) {
+						p = pow(10, -5);
+					}
+					prob += log(p);
+				}
+			}
+			prob += log(apriori.at<float>(c));
+			printf("Prob for class %d is %f\n", c, prob);
+			if (prob > maxProb) {
+				maxProb = prob;
+				finalClass = c;
+			}
+		}
+
+		printf("Predicted class is: %d\n", finalClass);
+		imshow("Image", img);
+		waitKey();
+	}
+}
+
+
+void perceptronClassifier() {
+	char fname[MAX_PATH];
+	while (openFileDlg(fname)) {
+		Mat img = imread(fname, IMREAD_COLOR);
+
+		int nrFeatures = 3;
+		Mat X(0, nrFeatures, CV_32FC1);
+		Mat y(0, 1, CV_32FC1);
+
+		for (int i = 0; i < img.rows; i++) {
+			for (int j = 0; j < img.cols; j++) {
+				Vec3b p = img.at<Vec3b>(i, j);
+				float coords[3] = { 1, j, i };
+				if (p == Vec3b(255, 0, 0)) {
+					// blue point
+					X.push_back(Mat(1, 3, CV_32FC1, coords));
+					y.push_back(Mat(1, 1, CV_32FC1, Scalar(1)));
+				}
+				else if (p == Vec3b(0, 0, 255)) {
+					// red point
+					X.push_back(Mat(1, 3, CV_32FC1, coords));
+					y.push_back(Mat(1, 1, CV_32FC1, Scalar(-1)));
+				}
+			}
+		}
+
+		Mat W(1, nrFeatures, CV_32FC1, { 0.1, 0.1, 0.1 });
+		int maxIterations = pow(10, 5);
+		float Elimit = pow(10, -5);
+		int n = X.rows;
+		float learningRate = pow(10, -4);
+		Mat partialImg;
+		img.copyTo(partialImg);
+		for (int iter = 0; iter < maxIterations; iter++) {
+			float E = 0;
+			Mat deriv(1, nrFeatures, CV_32FC1, { 0, 0, 0 });
+			for (int i = 0; i < n; i++) {
+				float z = 0;
+				for (int j = 0; j < W.cols; j++) {
+					z += W.at<float>(j) * X.at<float>(i, j);
+				}
+				if (z * y.at<float>(i) < 0) {
+					for (int j = 0; j < X.cols; j++) {
+						deriv.at<float>(j) -= y.at<float>(i) * X.at<float>(i, j);
+					}
+					E++;
+				}
+			}
+			E = E / n;
+			for (int j = 0; j < nrFeatures; j++) {
+				deriv.at<float>(j) /= n;
+			}
+			if (E < Elimit)
+				break;
+			for (int j = 0; j < W.cols; j++) {
+				W.at<float>(j) -= learningRate * deriv.at<float>(j);
+			}
+		}
+		
+		Mat resultImg;
+		img.copyTo(resultImg);
+		int y1 = (int)(-W.at<float>(0) / W.at<float>(2));
+		int y2 = (int)(-(W.at<float>(0) + img.cols * W.at<float>(1)) / W.at<float>(2));
+		line(resultImg, Point(0, y1), Point(img.cols, y2), Scalar(0, 255, 0), 2);
+		imshow("Perceptron classification", resultImg);
+		waitKey();
+	}
+}
+
+bool initializeFaceDetector() {
+	if (!faceDetector.isReady()) {
+		printf("Loading face detection cascades...\n");
+		bool loaded = faceDetector.loadCascades(
+			"resources/haarcascade_frontalface_default.xml",
+			"resources/haarcascade_eye.xml",
+			"resources/haarcascade_mcs_nose.xml",
+			"resources/haarcascade_mcs_mouth.xml"
+		);
+
+		if (!loaded) {
+			printf("ERROR: Failed to load cascades!\n");
+			printf("Make sure the cascade files are in the 'resources' folder.\n");
+			printf("\nPress any key to continue...\n");
+			waitKey(0);
+			return false;
+		}
+
+		printf("Face detection cascades loaded successfully!\n");
+		faceDetector.setParameters(1.1, 3, Size(30, 30));
+	}
+	return true;
+}
+
 
 int main() 
 {
@@ -960,6 +1639,15 @@ int main()
 		printf(" 15 - Hough Transform for line detection\n");
 		printf(" 16 - Distance Transform (DT). Pattern Matching using DT\n");
 		printf(" 17 - Statistical Data Analysis\n");
+		printf(" 18 - Principal Component Analysis (PCA)\n");
+		printf(" 19 - K-means Clustering\n");
+		printf(" 20 - K-Nearest Neighbor Classifier\n");
+		printf(" 21 - Naive Bayes Classifier\n");
+		printf(" 22 - Perceptron Classifier\n");
+		printf(" 23 - Face Detection in Images\n");
+		printf(" 24 - Face Detection in Video\n");
+		printf(" 25 - Face Detection from Webcam\n");
+		printf(" 26 - Face Detection with Details (face + eyes, nose, mouth)\n");
 		printf(" 0 - Exit\n\n");
 		printf("Option: ");
 		scanf("%d",&op);
@@ -1015,6 +1703,43 @@ int main()
 				break;
 			case 17:
 				statisticalDataAnalysis();
+				break;
+			case 18:
+				principalComponentAnalysis();
+				break;
+			case 19:
+				kmeansClustering();
+				break;
+			case 20:
+				knnClassifier();
+				break;
+			case 21:
+				naiveBayes();
+				break;
+			case 22:
+				perceptronClassifier();
+				break;
+			case 23:
+				if (initializeFaceDetector()) {
+					faceDetector.detectFacesInImage();
+				}
+				break;
+
+			case 24:
+				if (initializeFaceDetector()) {
+					faceDetector.detectFacesInVideo();
+				}
+				break;
+
+			case 25:
+				if (initializeFaceDetector()) {
+					faceDetector.detectFacesFromWebcam();
+				}
+				break;
+			case 26:
+				if (initializeFaceDetector()) {
+					faceDetector.detectFacesWithDetailsInImage();
+				}
 				break;
 		}
 	}

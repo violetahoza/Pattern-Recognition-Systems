@@ -6,7 +6,8 @@
 #include <math.h>
 #include <opencv2/core/utils/logger.hpp>
 #include <fstream>
-#include "FaceDetection.h"
+//#include "FaceDetection.h"
+#include "FaceDetector.h"
 
 using namespace cv;
 using namespace std;
@@ -1586,30 +1587,167 @@ void perceptronClassifier() {
 	}
 }
 
-bool initializeFaceDetector() {
-	if (!faceDetector.isReady()) {
-		printf("Loading face detection cascades...\n");
-		bool loaded = faceDetector.loadCascades(
-			"resources/haarcascade_frontalface_default.xml",
-			"resources/haarcascade_eye.xml",
-			"resources/haarcascade_mcs_nose.xml",
-			"resources/haarcascade_mcs_mouth.xml"
-		);
+//bool initializeFaceDetector() {
+//	if (!faceDetector.isReady()) {
+//		printf("Loading face detection cascades...\n");
+//		bool loaded = faceDetector.loadCascades(
+//			"resources/haarcascade_frontalface_default.xml",
+//			"resources/haarcascade_eye.xml",
+//			"resources/haarcascade_mcs_nose.xml",
+//			"resources/haarcascade_mcs_mouth.xml"
+//		);
+//
+//		if (!loaded) {
+//			printf("ERROR: Failed to load cascades!\n");
+//			printf("Make sure the cascade files are in the 'resources' folder.\n");
+//			printf("\nPress any key to continue...\n");
+//			waitKey(0);
+//			return false;
+//		}
+//
+//		printf("Face detection cascades loaded successfully!\n");
+//		faceDetector.setParameters(1.1, 3, Size(30, 30));
+//	}
+//	return true;
+//}
 
-		if (!loaded) {
-			printf("ERROR: Failed to load cascades!\n");
-			printf("Make sure the cascade files are in the 'resources' folder.\n");
-			printf("\nPress any key to continue...\n");
-			waitKey(0);
-			return false;
-		}
 
-		printf("Face detection cascades loaded successfully!\n");
-		faceDetector.setParameters(1.1, 3, Size(30, 30));
+struct weaklearner {
+	int feature_i;
+	int threshold;
+	int class_label;
+	float error;
+	int classify(Mat X) {
+		if (X.at<float>(feature_i) < threshold)
+			return class_label;
+		else
+			return -class_label;
 	}
-	return true;
+};
+
+int const MAXT = 100;
+
+struct classifier {
+	int T;
+	float alphas[MAXT];
+	weaklearner hs[MAXT];
+	int classify(Mat X) {
+		float x = 0;
+		for (int t = 0; t < T; t++) {
+			x += alphas[t] * hs[t].classify(X);
+		}
+		if (x < 0) {
+			return -1;
+		}
+		else {
+			return 1;
+		}
+	}
+};
+
+weaklearner findWeakLearner(Mat X, Mat y, Mat w, int imgSize) {
+	weaklearner bestH = { 0, 0, 0, 0 };
+	float bestErr = INT_MAX;
+	for (int j = 0; j < X.cols; j++) {
+		for (int t = 0; t < imgSize; t++) {
+			for (int class_label = -1; class_label < 2; class_label += 2) {
+				float err = 0;
+				for (int i = 0; i < X.rows; i++) {
+					float zi;
+					if (X.at<float>(i, j) < t) {
+						zi = class_label;
+					}
+					else {
+						zi = -class_label;
+					}
+					if (zi * y.at<float>(i) < 0) {
+						err += w.at<float>(i);
+					}
+				}
+				if (err < bestErr) {
+					bestErr = err;
+					bestH = { j, t, class_label, err };
+				}
+			}
+		}
+	}
+	return bestH;
 }
 
+void drawBoundary(Mat img, classifier clf) {
+	for (int i = 0; i < img.rows; i++) {
+		for (int j = 0; j < img.cols; j++) {
+			if (img.at<Vec3b>(i, j) == Vec3b(255, 255, 255)) {
+				float v[] = { (float)j ,(float)i };
+				Mat X(1, 2, CV_32FC1, v);
+				int res = clf.classify(X);
+				if (res < 0) {
+					img.at<Vec3b>(i, j) = { 255, 153, 153 };
+				}
+				else {
+					img.at<Vec3b>(i, j) = { 153, 255, 255 };
+				}
+			}
+		}
+	}
+	imshow("Boundary", img);
+	waitKey();
+}
+
+void adaBoost() {
+	char fname[MAX_PATH];
+	while (openFileDlg(fname)) {
+		Mat img = imread(fname, IMREAD_COLOR);
+		int imgSize = img.rows;
+
+		int nrFeatures = 2;
+		int nrExamples = 0;
+		Mat X(0, nrFeatures, CV_32FC1);
+		Mat y(0, 1, CV_32FC1);
+
+		for (int i = 0; i < img.rows; i++) {
+			for (int j = 0; j < img.cols; j++) {
+				Vec3b p = img.at<Vec3b>(i, j);
+				float coords[2] = { j, i };
+				if (p == Vec3b(255, 0, 0)) {
+					// blue point
+					X.push_back(Mat(1, nrFeatures, CV_32FC1, coords));
+					y.push_back(Mat(1, 1, CV_32FC1, Scalar(1)));
+					nrExamples++;
+				}
+				else if (p == Vec3b(0, 0, 255)) {
+					// red point
+					X.push_back(Mat(1, nrFeatures, CV_32FC1, coords));
+					y.push_back(Mat(1, 1, CV_32FC1, Scalar(-1)));
+					nrExamples++;
+				}
+			}
+		}
+
+		float initialWeight = 1 / (float)nrExamples;
+		Mat W(1, nrExamples, CV_32FC1, Scalar(initialWeight));
+		classifier c;
+		c.T = 10;
+		for (int t = 0; t < c.T; t++) {
+			weaklearner learner = findWeakLearner(X, y, W, imgSize);
+			float alpha = 0.5 * log((1 - learner.error) / learner.error);
+			c.alphas[t] = alpha;
+			c.hs[t] = learner;
+			float s = 0;
+			for (int i = 0; i < nrExamples; i++) {
+				W.at<float>(i) *= exp(-alpha * y.at<float>(i) * learner.classify(X.row(i)));
+				s += W.at<float>(i);
+			}
+			for (int i = 0; i < nrExamples; i++) {
+				W.at<float>(i) /= s;
+			}
+		}
+
+		Mat newImg;
+		img.copyTo(newImg);
+		drawBoundary(newImg, c);
+	}
+}
 
 int main() 
 {
@@ -1644,10 +1782,15 @@ int main()
 		printf(" 20 - K-Nearest Neighbor Classifier\n");
 		printf(" 21 - Naive Bayes Classifier\n");
 		printf(" 22 - Perceptron Classifier\n");
-		printf(" 23 - Face Detection in Images\n");
+		/*printf(" 23 - Face Detection in Images\n");
 		printf(" 24 - Face Detection in Video\n");
 		printf(" 25 - Face Detection from Webcam\n");
-		printf(" 26 - Face Detection with Details (face + eyes, nose, mouth)\n");
+		printf(" 26 - Face Detection with Details (face + eyes, nose, mouth)\n");*/
+		printf(" 27 - AdaBoost\n"); 
+		printf(" 28 - Train Face Detector\n");
+		printf(" 29 - Load Model\n");
+		printf(" 30 - Test Detector on Images\n");
+		printf(" 31 - Evaluate Detector Performance\n");
 		printf(" 0 - Exit\n\n");
 		printf("Option: ");
 		scanf("%d",&op);
@@ -1719,7 +1862,7 @@ int main()
 			case 22:
 				perceptronClassifier();
 				break;
-			case 23:
+			/*case 23:
 				if (initializeFaceDetector()) {
 					faceDetector.detectFacesInImage();
 				}
@@ -1740,6 +1883,21 @@ int main()
 				if (initializeFaceDetector()) {
 					faceDetector.detectFacesWithDetailsInImage();
 				}
+				break;*/
+			case 27:
+				adaBoost();
+				break;
+			case 28:
+				faceDetector.commandTrain();
+				break;
+			case 29:
+				faceDetector.commandLoadModel();
+				break;
+			case 30:
+				faceDetector.commandTestOnImage();
+				break;
+			case 31:
+				faceDetector.commandEvaluate();
 				break;
 		}
 	}

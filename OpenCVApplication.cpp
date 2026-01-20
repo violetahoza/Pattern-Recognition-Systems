@@ -6,8 +6,7 @@
 #include <math.h>
 #include <opencv2/core/utils/logger.hpp>
 #include <fstream>
-//#include "FaceDetection.h"
-#include "FaceDetector.h"
+#include "FaceDetection.h"
 
 using namespace cv;
 using namespace std;
@@ -1517,7 +1516,6 @@ void naiveBayes() {
 	}
 }
 
-
 void perceptronClassifier() {
 	char fname[MAX_PATH];
 	while (openFileDlg(fname)) {
@@ -1551,7 +1549,9 @@ void perceptronClassifier() {
 		float learningRate = pow(10, -4);
 		Mat partialImg;
 		img.copyTo(partialImg);
-		for (int iter = 0; iter < maxIterations; iter++) {
+
+		// batch perceptron
+		/*for (int iter = 0; iter < maxIterations; iter++) {
 			float E = 0;
 			Mat deriv(1, nrFeatures, CV_32FC1, { 0, 0, 0 });
 			for (int i = 0; i < n; i++) {
@@ -1575,6 +1575,28 @@ void perceptronClassifier() {
 			for (int j = 0; j < W.cols; j++) {
 				W.at<float>(j) -= learningRate * deriv.at<float>(j);
 			}
+		}*/
+
+		// online perceptron
+		for (int iter = 0; iter < maxIterations; iter++) {
+			float E = 0;
+
+			for (int i = 0; i < n; i++) {
+				float z = 0;
+
+				for (int j = 0; j < W.cols; j++)
+					z += W.at<float>(j) * X.at<float>(i, j);
+
+				if (z * y.at<float>(i) < 0)
+				{
+					for (int j = 0; j < W.cols; j++)
+						W.at<float>(j) += learningRate * y.at<float>(i) * X.at<float>(i, j);
+					E++;
+				}
+			}
+
+			E /= n;
+			if (E < Elimit) break;
 		}
 		
 		Mat resultImg;
@@ -1586,31 +1608,6 @@ void perceptronClassifier() {
 		waitKey();
 	}
 }
-
-//bool initializeFaceDetector() {
-//	if (!faceDetector.isReady()) {
-//		printf("Loading face detection cascades...\n");
-//		bool loaded = faceDetector.loadCascades(
-//			"resources/haarcascade_frontalface_default.xml",
-//			"resources/haarcascade_eye.xml",
-//			"resources/haarcascade_mcs_nose.xml",
-//			"resources/haarcascade_mcs_mouth.xml"
-//		);
-//
-//		if (!loaded) {
-//			printf("ERROR: Failed to load cascades!\n");
-//			printf("Make sure the cascade files are in the 'resources' folder.\n");
-//			printf("\nPress any key to continue...\n");
-//			waitKey(0);
-//			return false;
-//		}
-//
-//		printf("Face detection cascades loaded successfully!\n");
-//		faceDetector.setParameters(1.1, 3, Size(30, 30));
-//	}
-//	return true;
-//}
-
 
 struct weaklearner {
 	int feature_i;
@@ -1749,6 +1746,31 @@ void adaBoost() {
 	}
 }
 
+bool initializeFaceDetector() {
+	if (!faceDetector.isReady()) {
+		printf("Loading face detection cascades...\n");
+		bool loaded = faceDetector.loadCascades(
+			"resources/haarcascade_frontalface_default.xml",
+			"resources/haarcascade_eye.xml",
+			"resources/haarcascade_mcs_nose.xml",
+			"resources/haarcascade_mcs_mouth.xml"
+		);
+
+		if (!loaded) {
+			printf("ERROR: Failed to load cascades!\n");
+			printf("Make sure the cascade files are in the 'resources' folder.\n");
+			printf("\nPress any key to continue...\n");
+			waitKey(0);
+			return false;
+		}
+
+		printf("Face detection cascades loaded successfully!\n");
+		faceDetector.setParameters(1.1, 3, Size(30, 30));
+	}
+	return true;
+}
+
+
 int main() 
 {
 	cv::utils::logging::setLogLevel(cv::utils::logging::LOG_LEVEL_FATAL);
@@ -1782,15 +1804,12 @@ int main()
 		printf(" 20 - K-Nearest Neighbor Classifier\n");
 		printf(" 21 - Naive Bayes Classifier\n");
 		printf(" 22 - Perceptron Classifier\n");
-		/*printf(" 23 - Face Detection in Images\n");
+		printf(" 23 - Face Detection in Images\n");
 		printf(" 24 - Face Detection in Video\n");
 		printf(" 25 - Face Detection from Webcam\n");
-		printf(" 26 - Face Detection with Details (face + eyes, nose, mouth)\n");*/
+		printf(" 26 - Face Detection with Details (face + eyes, nose, mouth)\n");
 		printf(" 27 - AdaBoost\n"); 
-		printf(" 28 - Train Face Detector\n");
-		printf(" 29 - Load Model\n");
-		printf(" 30 - Test Detector on Images\n");
-		printf(" 31 - Evaluate Detector Performance\n");
+
 		printf(" 0 - Exit\n\n");
 		printf("Option: ");
 		scanf("%d",&op);
@@ -1862,7 +1881,7 @@ int main()
 			case 22:
 				perceptronClassifier();
 				break;
-			/*case 23:
+			case 23:
 				if (initializeFaceDetector()) {
 					faceDetector.detectFacesInImage();
 				}
@@ -1883,22 +1902,11 @@ int main()
 				if (initializeFaceDetector()) {
 					faceDetector.detectFacesWithDetailsInImage();
 				}
-				break;*/
+				break;
 			case 27:
 				adaBoost();
 				break;
-			case 28:
-				faceDetector.commandTrain();
-				break;
-			case 29:
-				faceDetector.commandLoadModel();
-				break;
-			case 30:
-				faceDetector.commandTestOnImage();
-				break;
-			case 31:
-				faceDetector.commandEvaluate();
-				break;
+
 		}
 	}
 	while (op!=0);
